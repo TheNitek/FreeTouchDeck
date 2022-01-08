@@ -530,7 +530,7 @@ void bleKeyboardAction(int action, int value, char *symbol)
         bleKeyboard.write(KEY_NUM_SLASH);
         break;
       case 11:
-        bleKeyboard.write(KEY_NUM_ASTERISK);
+        bleKeyboard.write(KEY_NUM_ASTERIX);
         break;
       case 12:
         bleKeyboard.write(KEY_NUM_MINUS);

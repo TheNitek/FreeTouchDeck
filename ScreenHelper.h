@@ -68,87 +68,6 @@ unsigned int convertRGB888ToRGB565(unsigned long rgb)
 }
 
 /**
-* @brief This function draws a transparent BMP on the TFT screen according
-         to the given x and y coordinates. 
-*
-* @param  *filename
-* @param x int16_t 
-* @param y int16_t 
-*
-* @return none
-*
-* @note A completely black pixel is transparent e.g. (0x0000) not drawn.
-*/
-void drawBmpTransparent(const char *filename, int16_t x, int16_t y)
-{
-
-  if ((x >= tft.width()) || (y >= tft.height()))
-    return;
-
-  fs::File bmpFS;
-
-  bmpFS = FILESYSTEM.open(filename, "r");
-
-  if (!bmpFS)
-  {
-    Serial.println("[WARNING]: Bitmap not found: ");
-    Serial.println(filename);
-    filename = "/logos/question.bmp";
-    bmpFS = FILESYSTEM.open(filename, "r");
-  }
-
-  uint32_t seekOffset;
-  uint16_t w, h, row;
-  uint8_t r, g, b;
-
-  if (read16(bmpFS) == 0x4D42)
-  {
-    read32(bmpFS);
-    read32(bmpFS);
-    seekOffset = read32(bmpFS);
-    read32(bmpFS);
-    w = read32(bmpFS);
-    h = read32(bmpFS);
-
-    if ((read16(bmpFS) == 1) && (read16(bmpFS) == 24) && (read32(bmpFS) == 0))
-    {
-      y += h - 1;
-
-      bool oldSwapBytes = tft.getSwapBytes();
-      tft.setSwapBytes(true);
-      bmpFS.seek(seekOffset);
-
-      uint16_t padding = (4 - ((w * 3) & 3)) & 3;
-      uint8_t lineBuffer[w * 3 + padding];
-
-      for (row = 0; row < h; row++)
-      {
-
-        bmpFS.read(lineBuffer, sizeof(lineBuffer));
-        uint8_t *bptr = lineBuffer;
-        uint16_t *tptr = (uint16_t *)lineBuffer;
-        // Convert 24 to 16 bit colours
-        for (uint16_t col = 0; col < w; col++)
-        {
-          b = *bptr++;
-          g = *bptr++;
-          r = *bptr++;
-          *tptr++ = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-        }
-
-        // Push the pixel row to screen, pushImage will crop the line if needed
-        // y is decremented as the BMP image is drawn bottom up
-        tft.pushImage(x, y--, w, 1, (uint16_t *)lineBuffer, TFT_BLACK);
-      }
-      tft.setSwapBytes(oldSwapBytes);
-    }
-    else
-      Serial.println("BMP format not recognized.");
-  }
-  bmpFS.close();
-}
-
-/**
 * @brief This function draws a BMP on the TFT screen according
          to the given x and y coordinates. 
 *
@@ -157,10 +76,8 @@ void drawBmpTransparent(const char *filename, int16_t x, int16_t y)
 * @param y int16_t 
 *
 * @return none
-*
-* @note In contradiction to drawBmpTransparent() this does draw black pixels.
 */
-void drawBmp(const char *filename, int16_t x, int16_t y)
+void drawBmp(const char *filename, int16_t x, int16_t y, bool transparent = false)
 {
 
   if ((x >= tft.width()) || (y >= tft.height()))
@@ -179,7 +96,7 @@ void drawBmp(const char *filename, int16_t x, int16_t y)
   }
 
   uint32_t seekOffset;
-  uint16_t w, h, row;
+  uint16_t w, h;
   uint8_t r, g, b;
 
   if (read16(bmpFS) == 0x4D42)
@@ -190,6 +107,7 @@ void drawBmp(const char *filename, int16_t x, int16_t y)
     read32(bmpFS);
     w = read32(bmpFS);
     h = read32(bmpFS);
+    Serial.printf("Image size: %d x %d\n", w, h);
 
     if ((read16(bmpFS) == 1) && (read16(bmpFS) == 24) && (read32(bmpFS) == 0))
     {
@@ -200,14 +118,14 @@ void drawBmp(const char *filename, int16_t x, int16_t y)
       bmpFS.seek(seekOffset);
 
       uint16_t padding = (4 - ((w * 3) & 3)) & 3;
-      uint8_t lineBuffer[w * 3 + padding];
+      uint8_t lineBuffer[2][w * 3 + padding];
+      int8_t bufIdx = 0;
 
-      for (row = 0; row < h; row++)
+      for (uint16_t row = 0; row < h; row++)
       {
-
-        bmpFS.read(lineBuffer, sizeof(lineBuffer));
-        uint8_t *bptr = lineBuffer;
-        uint16_t *tptr = (uint16_t *)lineBuffer;
+        bmpFS.read(lineBuffer[bufIdx], sizeof(lineBuffer[bufIdx]));
+        uint8_t *bptr = lineBuffer[bufIdx];
+        uint16_t *tptr = (uint16_t *)lineBuffer[bufIdx];
         // Convert 24 to 16 bit colours
         for (uint16_t col = 0; col < w; col++)
         {
@@ -219,7 +137,16 @@ void drawBmp(const char *filename, int16_t x, int16_t y)
 
         // Push the pixel row to screen, pushImage will crop the line if needed
         // y is decremented as the BMP image is drawn bottom up
-        tft.pushImage(x, y--, w, 1, (uint16_t *)lineBuffer);
+        if(transparent)
+        {
+          tft.pushImage(x, y--, w, 1, (uint16_t *)lineBuffer[bufIdx], TFT_BLACK);
+        }
+        else
+        {
+          tft.pushImageDMA(x, y--, w, 1, (uint16_t *)lineBuffer[bufIdx]);
+        }
+
+        bufIdx = 1 - bufIdx;
       }
       tft.setSwapBytes(oldSwapBytes);
     }
@@ -272,8 +199,7 @@ uint16_t getBMPColor(const char *filename)
 {
 
   // Open File
-  File bmpImage;
-  bmpImage = SPIFFS.open(filename, FILE_READ);
+  File bmpImage = SPIFFS.open(filename, FILE_READ);
 
   int32_t dataStartingOffset = readNbytesInt(&bmpImage, 0x0A, 4);
   int16_t pixelsize = readNbytesInt(&bmpImage, 0x1C, 2);
@@ -317,183 +243,16 @@ uint16_t getImageBG(int logonumber)
    }
    else
    {
-
-    if (pageNum == 0)
+    if (pageNum < 6)
     {
-      if (logonumber == 0)
+      if (logonumber < 6)
       {
-        return getBMPColor(screen0.logo0);
-      }
-      else if (logonumber == 1)
-      {
-        return getBMPColor(screen0.logo1);
-      }
-      else if (logonumber == 2)
-      {
-        return getBMPColor(screen0.logo2);
-      }
-      else if (logonumber == 3)
-      {
-        return getBMPColor(screen0.logo3);
-      }
-      else if (logonumber == 4)
-      {
-        return getBMPColor(screen0.logo4);
-      }
-      else if (logonumber == 5)
-      {
-        return getBMPColor(screen0.logo5);
-      }
-      else
-      {
-        return 0x0000;
+        return getBMPColor(screen[pageNum].logo[logonumber]);
       }
     }
-    else if (pageNum == 1)
-    {
-      if (logonumber == 0)
-      {
-        return getBMPColor(screen1.logo0);
-      }
-      else if (logonumber == 1)
-      {
-        return getBMPColor(screen1.logo1);
-      }
-      else if (logonumber == 2)
-      {
-        return getBMPColor(screen1.logo2);
-      }
-      else if (logonumber == 3)
-      {
-        return getBMPColor(screen1.logo3);
-      }
-      else if (logonumber == 4)
-      {
-        return getBMPColor(screen1.logo4);
-      }
-      else
-      {
-        return 0x0000;
-      }
-    }
-    else if (pageNum == 2)
-    {
-      if (logonumber == 0)
-      {
-        return getBMPColor(screen2.logo0);
-      }
-      else if (logonumber == 1)
-      {
-        return getBMPColor(screen2.logo1);
-      }
-      else if (logonumber == 2)
-      {
-        return getBMPColor(screen2.logo2);
-      }
-      else if (logonumber == 3)
-      {
-        return getBMPColor(screen2.logo3);
-      }
-      else if (logonumber == 4)
-      {
-        return getBMPColor(screen2.logo4);
-      }
-      else
-      {
-        return 0x0000;
-      }
-    }
-    else if (pageNum == 3)
-    {
-      if (logonumber == 0)
-      {
-        return getBMPColor(screen3.logo0);
-      }
-      else if (logonumber == 1)
-      {
-        return getBMPColor(screen3.logo1);
-      }
-      else if (logonumber == 2)
-      {
-        return getBMPColor(screen3.logo2);
-      }
-      else if (logonumber == 3)
-      {
-        return getBMPColor(screen3.logo3);
-      }
-      else if (logonumber == 4)
-      {
-        return getBMPColor(screen3.logo4);
-      }
-      else
-      {
-        return 0x0000;
-      }
-    }
-    else if (pageNum == 4)
-    {
-      if (logonumber == 0)
-      {
-        return getBMPColor(screen4.logo0);
-      }
-      else if (logonumber == 1)
-      {
-        return getBMPColor(screen4.logo1);
-      }
-      else if (logonumber == 2)
-      {
-        return getBMPColor(screen4.logo2);
-      }
-      else if (logonumber == 3)
-      {
-        return getBMPColor(screen4.logo3);
-      }
-      else if (logonumber == 4)
-      {
-        return getBMPColor(screen4.logo4);
-      }
-      else
-      {
-        return 0x0000;
-      }
-    }
-    else if (pageNum == 5)
-    {
-      if (logonumber == 0)
-      {
-        return getBMPColor(screen5.logo0);
-      }
-      else if (logonumber == 1)
-      {
-        return getBMPColor(screen5.logo1);
-      }
-      else if (logonumber == 2)
-      {
-        return getBMPColor(screen5.logo2);
-      }
-      else if (logonumber == 3)
-      {
-        return getBMPColor(screen5.logo3);
-      }
-      else if (logonumber == 4)
-      {
-        return getBMPColor(screen5.logo4);
-      }
-      else
-      {
-        return 0x0000;
-      }
-    }
-    else if (pageNum == 6)
-    {
-      return 0x0000;
-    }
-    else
-    {
-      return 0x0000;
-    }
-
   }
+
+  return 0x0000;
 }
 
 /**
@@ -508,248 +267,14 @@ uint16_t getImageBG(int logonumber)
 */
 uint16_t getLatchImageBG(int logonumber)
 {
+  if (pageNum < 6 && logonumber < 5)
+  {
+    if (strcmp(menu[pageNum-1].button[logonumber].latchlogo, "/logos/") == 0)
+    {
+      return getBMPColor(screen[pageNum].logo[logonumber]);
+    }
+    return getBMPColor(menu[pageNum-1].button[logonumber].latchlogo);
+  }
 
-  if (pageNum == 1)
-  {
-    if (logonumber == 0)
-    {
-      if (strcmp(menu1.button0.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen1.logo0);
-      }
-      return getBMPColor(menu1.button0.latchlogo);
-    }
-    else if (logonumber == 1)
-    {
-      if (strcmp(menu1.button1.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen1.logo1);
-      }
-      return getBMPColor(menu1.button1.latchlogo);
-    }
-    else if (logonumber == 2)
-    {
-      if (strcmp(menu1.button2.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen1.logo2);
-      }
-      return getBMPColor(menu1.button2.latchlogo);
-    }
-    else if (logonumber == 3)
-    {
-      if (strcmp(menu1.button3.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen1.logo3);
-      }
-      return getBMPColor(menu1.button3.latchlogo);
-    }
-    else if (logonumber == 4)
-    {
-      if (strcmp(menu1.button4.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen1.logo4);
-      }
-      return getBMPColor(menu1.button4.latchlogo);
-    }
-    else
-    {
-      return 0x0000;
-    }
-  }
-  else if (pageNum == 2)
-  {
-    if (logonumber == 0)
-    {
-      if (strcmp(menu2.button0.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen2.logo0);
-      }
-      return getBMPColor(menu2.button0.latchlogo);
-    }
-    else if (logonumber == 1)
-    {
-      if (strcmp(menu2.button1.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen2.logo1);
-      }
-      return getBMPColor(menu2.button1.latchlogo);
-    }
-    else if (logonumber == 2)
-    {
-      if (strcmp(menu2.button2.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen2.logo2);
-      }
-      return getBMPColor(menu2.button2.latchlogo);
-    }
-    else if (logonumber == 3)
-    {
-      if (strcmp(menu2.button3.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen2.logo3);
-      }
-      return getBMPColor(menu2.button3.latchlogo);
-    }
-    else if (logonumber == 4)
-    {
-      if (strcmp(menu2.button4.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen2.logo4);
-      }
-      return getBMPColor(menu2.button4.latchlogo);
-    }
-    else
-    {
-      return 0x0000;
-    }
-  }
-  else if (pageNum == 3)
-  {
-    if (logonumber == 0)
-    {
-      if (strcmp(menu3.button0.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen3.logo0);
-      }
-      return getBMPColor(menu3.button0.latchlogo);
-    }
-    else if (logonumber == 1)
-    {
-      if (strcmp(menu3.button1.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen3.logo1);
-      }
-      return getBMPColor(menu3.button1.latchlogo);
-    }
-    else if (logonumber == 2)
-    {
-      if (strcmp(menu3.button2.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen3.logo2);
-      }
-      return getBMPColor(menu3.button2.latchlogo);
-    }
-    else if (logonumber == 3)
-    {
-      if (strcmp(menu3.button3.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen3.logo3);
-      }
-      return getBMPColor(menu3.button3.latchlogo);
-    }
-    else if (logonumber == 4)
-    {
-      if (strcmp(menu3.button4.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen3.logo4);
-      }
-      return getBMPColor(menu3.button4.latchlogo);
-    }
-    else
-    {
-      return 0x0000;
-    }
-  }
-  else if (pageNum == 4)
-  {
-    if (logonumber == 0)
-    {
-      if (strcmp(menu4.button0.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen4.logo0);
-      }
-      return getBMPColor(menu4.button0.latchlogo);
-    }
-    else if (logonumber == 1)
-    {
-      if (strcmp(menu4.button1.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen4.logo1);
-      }
-      return getBMPColor(menu4.button1.latchlogo);
-    }
-    else if (logonumber == 2)
-    {
-      if (strcmp(menu4.button2.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen4.logo2);
-      }
-      return getBMPColor(menu4.button2.latchlogo);
-    }
-    else if (logonumber == 3)
-    {
-      if (strcmp(menu4.button3.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen4.logo3);
-      }
-      return getBMPColor(menu4.button3.latchlogo);
-    }
-    else if (logonumber == 4)
-    {
-      if (strcmp(menu4.button4.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen4.logo4);
-      }
-      return getBMPColor(menu4.button4.latchlogo);
-    }
-    else
-    {
-      return 0x0000;
-    }
-  }
-  else if (pageNum == 5)
-  {
-    if (logonumber == 0)
-    {
-      if (strcmp(menu5.button0.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen5.logo0);
-      }
-      return getBMPColor(menu5.button0.latchlogo);
-    }
-    else if (logonumber == 1)
-    {
-      if (strcmp(menu5.button1.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen5.logo1);
-      }
-      return getBMPColor(menu5.button1.latchlogo);
-    }
-    else if (logonumber == 2)
-    {
-      if (strcmp(menu5.button2.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen5.logo2);
-      }
-      return getBMPColor(menu5.button2.latchlogo);
-    }
-    else if (logonumber == 3)
-    {
-      if (strcmp(menu5.button3.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen5.logo3);
-      }
-      return getBMPColor(menu5.button3.latchlogo);
-    }
-    else if (logonumber == 4)
-    {
-      if (strcmp(menu5.button4.latchlogo, "/logos/") == 0)
-      {
-        return getBMPColor(screen5.logo4);
-      }
-      return getBMPColor(menu5.button4.latchlogo);
-    }
-    else
-    {
-      return 0x0000;
-    }
-  }
-  else if (pageNum == 6)
-  {
-    return 0x0000;
-  }
-  else
-  {
-    return 0x0000;
-  }
+  return 0x0000;
 }
